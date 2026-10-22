@@ -1,0 +1,19 @@
+[Unit]
+Description=Private phone controller e-paper display
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/phone-controller
+ExecStart=/usr/bin/python3 -m display_service.app
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/phone-controller
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

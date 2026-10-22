@@ -1,0 +1,29 @@
+{
+  "id": "openclaw-phone",
+  "name": "Phone control",
+  "description": "Deterministic private command bridge",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "bridgeConfigPath": {
+        "type": "string"
+      },
+      "statePath": {
+        "type": "string"
+      }
+    }
+  },
+  "activation": {
+    "onStartup": true,
+    "onCommands": [
+      "phone"
+    ]
+  },
+  "commandAliases": [
+    {
+      "name": "phone",
+      "kind": "runtime-slash"
+    }
+  ]
+}

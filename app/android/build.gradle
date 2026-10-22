@@ -1,0 +1,35 @@
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.buildDir = "../build"
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
+
+// Flutter 插件（如 file_picker）的 build.gradle 会引用 flutter.compileSdkVersion，
+// 但该变量只在 :app 里定义，插件工程拿到 null 就会崩在 substring()。
+// 用 beforeProject 在插件被评估前注入。注意 Groovy 里 buildscript.ext 不能
+// 用属性链访问，必须写成 buildscript { ext { ... } } 块。
+gradle.beforeProject { p ->
+    p.buildscript {
+        ext {
+            flutter = [
+                compileSdkVersion: 36,
+                minSdkVersion    : 21,
+                targetSdkVersion : 36,
+                ndkVersion       : "27.0.12077973"
+            ]
+        }
+    }
+}

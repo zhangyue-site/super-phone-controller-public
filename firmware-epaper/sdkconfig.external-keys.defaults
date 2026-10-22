@@ -1,0 +1,2 @@
+# Optional V2 J1 dry-contact inputs: A=GPIO1--GND, B=GPIO2--GND.
+CONFIG_CONTROLLER_EXTERNAL_KEYS=y

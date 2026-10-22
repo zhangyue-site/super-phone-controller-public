@@ -1,0 +1,6 @@
+CONFIG_TINYUSB_NET_MODE_NCM=y
+# CONFIG_TINYUSB_NET_MODE_NONE is not set
+CONFIG_CONTROLLER_USB_LOCAL=y
+
+# Never advertise the controller as an internet DNS server.
+# CONFIG_LWIP_DHCPS_ADD_DNS is not set

@@ -1,0 +1,1 @@
+Synthetic 320x240 blue frame, one IDR H.264 Annex B with SPS/PPS. Generated from FFmpeg lavfi color using libx264, no phone/user data. Used only to test server decoding; no encoder is required on the server.
