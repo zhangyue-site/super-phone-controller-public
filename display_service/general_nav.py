@@ -2,6 +2,7 @@ from .model_routing import task_model_session
 """App-independent screenshot navigation using the established mailbox fences."""
 import base64,re,time,json
 from .wechat_nav import WechatNavigator
+from .dialogue import PhoneCommandError
 from .skill_engine import WorkflowSpec,region,matches,region_matches
 from .general_vision import observe
 from .dialogue import DENY
@@ -28,6 +29,14 @@ class GeneralNavigator(WechatNavigator):
    j.state='running';j.reply={'hid_home':'正在回到手机桌面','hid_pointer':'正在按画面定位导航目标','type_text':'正在输入搜索词并恢复原输入法'}.get(metadata.get('op'),'正在导航')
   elif stage=='vision' and metadata.get('verify'):j.state='verifying';j.reply='正在独立核验目标画面'
   print("GENERAL_NAV "+json.dumps(dict(device=j.device,turn=j.sequence,stage=stage,**metadata),separators=(",",":")),flush=True)
+ def _action(self,j,command,sig):
+  try:return super()._action(j,command,sig)
+  except PhoneCommandError as e:
+   # input_failed means the HID report never reached the USB endpoint:
+   # resubmitting once is safe (firmware dedupes by command id).
+   if e.code!='input_failed' or command.get('op') not in ('hid_pointer','hid_home'):raise
+   self._log(j,'input_retry',op=command.get('op'))
+   return super()._action(j,command,sig)
  def _command(self,o,task):
   action=o.get('action')
   label=o.get('target_label')
