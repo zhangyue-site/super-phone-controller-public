@@ -2,6 +2,7 @@
 import json,os,re,threading,time,uuid
 from pathlib import Path
 from .wechat_nav import parse_task
+from .general_nav import parse_task as parse_general
 TERMINAL=frozenset(('done','error','stopped','expired','replaced'))
 CHANNELS=frozenset(('openclaw-weixin','telegram','android-app'))
 class RemoteControl:
@@ -59,7 +60,7 @@ class RemoteControl:
   return dict(task_id=ident,state=r['state'],reply=r['reply'],verified=bool(r.get('verified')),terminal=r['state'] in TERMINAL)
  def prepare(self,owner,text):
   owner=self._owner(owner)
-  if not isinstance(text,str) or len(text)>120 or parse_task(text) is None:raise ValueError('目前支持打开微信找联系人，并停留搜索结果页，不发送消息。')
+  if not isinstance(text,str) or len(text)>120 or (parse_task(text) is None and parse_general(text) is None):raise ValueError('仅支持打开、导航和搜索。')
   query=parse_task(text)
   with self.lock:
    self._sync()
@@ -69,7 +70,8 @@ class RemoteControl:
     for ident in list(self.records):
      if self.records[ident]['state'] in TERMINAL:self.records.pop(ident);self.jobs.pop(ident,None);break
     else:raise ValueError('待处理任务过多')
-   ident=uuid.uuid4().hex;reply='计划：从桌面打开微信，搜索'+query+'，停在搜索结果页，不发消息。回复 /phone 确认 '+ident+' 后执行；两分钟内有效。'
+   ident=uuid.uuid4().hex;reply='计划：从桌面打开微信，搜索'+(query or '')+'，停在搜索结果页，不发消息。回复 /phone 确认 '+ident+' 后执行；两分钟内有效。'
+   if query is None:reply='计划：'+text+'；仅执行安全导航，保留结果页并独立核验。确认 '+ident+' 后执行；两分钟有效。'
    r=dict(owner=owner,text=text,state='pending',reply=reply,expires=self.clock()+120,verified=False)
    self.records[ident]=r;self._save();return self._reply(ident,r)
  def confirm(self,owner,ident):
@@ -129,7 +131,7 @@ class RemoteControl:
   with self.lock:
    self._sync();owner=self._owner(owner)
    if ident is None and not any(r['owner']==owner for r in self.records.values()):
-    return dict(state='idle',reply='当前没有手机控制任务。发送 /phone 打开微信找到张三 可先查看计划。',terminal=True,verified=False)
+    return dict(state='idle',reply='当前没有手机控制任务。发送 /phone 打开微信找到李洋 可先查看计划。',terminal=True,verified=False)
    ident,r=self._get(owner,ident);return self._reply(ident,r)
  def stop_device(self,device):
   with self.lock,self.runtime_lock:

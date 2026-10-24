@@ -1,13 +1,19 @@
 """Opt-in screen frames authorized by a separate BLE-possession capability.
 No phone actions, device bearer keys, screenshots on disk, or ADB access.
 """
-import json,re,threading
+import json,re,threading,os
 from .app_ota import Authority
 from .conversation import CONVERSATION
 from .wechat_nav import STORE
 AUTHORITY=Authority()
 LOCK=threading.Lock()
 SEQUENCES={}
+
+def extend_diagnostic_ticket(device,grant):
+ if device!='epaper-01' or os.environ.get('EPAPER_SCREEN_DIAG_LONG')!='epaper-01':return
+ item=AUTHORITY.tickets.get(grant['ticket'])
+ if item is None or item[1]!=device:raise ValueError('ticket')
+ AUTHORITY.tickets[grant['ticket']]=(AUTHORITY.clock()+1200,item[1],item[2]);grant['expiresIn']=1200
 
 def subject(ticket):
  if not isinstance(ticket,str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}',ticket):raise ValueError('ticket')
@@ -35,6 +41,7 @@ def handle(handler,config):
     if set(obj)!={'device','challenge','proof'}:raise ValueError('fields')
     grant=AUTHORITY.authorize(obj['device'],obj['challenge'],obj['proof'],keys)
     with AUTHORITY.lock:
+     extend_diagnostic_ticket(obj['device'],grant)
      for old,item in list(AUTHORITY.tickets.items()):
       if item[1]==obj['device'] and old!=grant['ticket']:AUTHORITY.tickets.pop(old,None)
      CONVERSATION.mailbox.cancel(obj['device'])
@@ -83,8 +90,16 @@ def handle(handler,config):
      handler.reply(202,json.dumps({'accepted':False,'reason':'capture barrier required','barrier':j.video_barrier}).encode());return True
     capture_barrier=j.video_barrier
     voice_session,voice_sequence,frame_sequence=j.session,j.sequence,j.video_sequence+1
-   result=mailbox.ingest_video(device,voice_session,voice_sequence,frame_sequence,payload,'jpeg',expected_barrier=capture_barrier,source='user-consented-app-screen')
+   try:
+    result=mailbox.ingest_video(device,voice_session,voice_sequence,frame_sequence,payload,'jpeg',expected_barrier=capture_barrier,source='user-consented-app-screen')
+   except ValueError:
+    with mailbox.lock:
+     if mailbox.jobs.get(device) is j and (j.done or j.cancelled):
+      handler.reply(202,b'{"accepted":false,"reason":"no active voice task","barrier":"00000000000000000000000000000000"}');return True
+    raise
    with mailbox.lock:
+    if mailbox.jobs.get(device) is j and (j.done or j.cancelled):
+     handler.reply(202,b'{"accepted":false,"reason":"no active voice task","barrier":"00000000000000000000000000000000"}');return True
     if mailbox._job(device,voice_session,voice_sequence) is not j or j.done or j.video_barrier!=capture_barrier:raise ValueError('superseded')
     j.video_source='user-consented-app-screen'
     result['barrier']=j.video_barrier

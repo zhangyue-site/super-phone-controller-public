@@ -4,16 +4,15 @@ from pathlib import Path
 from .voice import recognize
 
 def chat_probe():
-    providers=json.loads(Path('/var/lib/phone-controller/openclaw/openclaw.json').read_text())['models']['providers']
-    for provider,model,base in (('zai','glm-4.7-flash','https://open.bigmodel.cn/api/paas/v4'),
-                                ('deepseek','deepseek-flash','https://api.deepseek.com')):
+    # Probe the same configured route as normal conversations, never a separate
+    # obsolete model or hard-coded provider URL.
+    from .model_routing import chat_routes,request_headers
+    for provider,model,config in chat_routes():
         try:
-            config=providers[provider]
-            payload={'model':model,'max_tokens':16,'thinking':{'type':'disabled'},
+            payload={'model':model,'max_tokens':128,'thinking':{'type':'disabled'},
                      'messages':[{'role':'user','content':'Reply exactly OK'}]}
-            url=(base if provider=='zai' else config.get('baseUrl',base)).rstrip('/')+'/chat/completions'
-            req=urllib.request.Request(url,data=json.dumps(payload).encode(),
-                 headers={'Authorization':'Bearer '+config['apiKey'],'Content-Type':'application/json'})
+            req=urllib.request.Request(config['baseUrl'].rstrip('/')+'/chat/completions',
+                data=json.dumps(payload).encode(),headers=request_headers(config))
             with urllib.request.urlopen(req,timeout=12) as response:result=json.load(response)
             if result['choices'][0]['message']['content'].strip().upper()=='OK':return
         except (OSError,ValueError,KeyError,IndexError):pass

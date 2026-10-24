@@ -8,11 +8,11 @@ from urllib.parse import urlparse,parse_qs
 from . import events,firmware,app_ota,app_screen
 from .conversation import CONVERSATION
 from . import remote_http,app_control
-from .audio_stream import read_chunks
+from .audio_stream import EarlyDisconnect,read_chunks,read_chunks_tolerant
 from .model import quota_rows
 from .voice import validate_pcm,recognize
 from .readiness import READINESS
-from .render import render,render_dialogue
+from .render import render,render_dialogue,render_voice_ui
 from .control import read as read_interaction, write as write_interaction
 
 CONFIG=Path(os.environ.get('EPAPER_CONFIG','/etc/phone-controller/devices.json'))
@@ -22,7 +22,6 @@ INTERACTIONS={}
 VOICE_BUSY=set()
 VOICE_GENERATION={}
 VOICE_CANCELLED={}
-
 
 def _remote_cancel_voice(device):
     VOICE_GENERATION[device]=VOICE_GENERATION.get(device,0)+1
@@ -140,10 +139,23 @@ class Handler(BaseHTTPRequestHandler):
                 if self.path=='/dialogue/poll':
                     return self.reply(200,json.dumps(CONVERSATION.mailbox.poll(device,session,sequence,pointer_protocol=self.headers.get('X-HID-Pointer')),ensure_ascii=False).encode())
                 if self.path=='/dialogue/screen':
+                    size=int(self.headers.get('Content-Length','0'));requested=None
+                    if size:
+                        if not 1<=size<=128:raise ValueError('screen revision size')
+                        body=json.loads(self.rfile.read(size))
+                        if set(body)!={'revision'} or type(body['revision'])!=int:raise ValueError('screen revision fields')
+                        requested=body['revision']
                     with CONVERSATION.mailbox.lock:
                         j=CONVERSATION.mailbox._job(device,session,sequence)
-                        frame=render_dialogue(j.reply,j.state,j.speech_error).tobytes()
+                        if requested is not None and requested!=j.ui_revision:raise ValueError('stale screen revision')
+                        frame=(render_voice_ui(j) if j.ui_protocol=='plan-v1' else render_dialogue(j.reply,j.state,j.speech_error)).tobytes()
                     return self.reply(200,frame,'application/octet-stream')
+                if self.path=='/dialogue/seen':
+                    size=int(self.headers.get('Content-Length','0'))
+                    if not 1<=size<=128:raise ValueError('UI ack size')
+                    body=json.loads(self.rfile.read(size))
+                    if set(body)!={'revision'}:raise ValueError('UI ack fields')
+                    return self.reply(200,json.dumps(CONVERSATION.mailbox.ui_seen(device,session,sequence,body['revision'])).encode())
                 if self.path=='/dialogue/audio':
                     return self.reply(200,CONVERSATION.mailbox.audio(device,session,sequence),'application/octet-stream')
                 if self.path in ('/dialogue/result','/dialogue/text'):
@@ -157,7 +169,7 @@ class Handler(BaseHTTPRequestHandler):
                         if not isinstance(text,str) or not 1<=len(text)<=120:raise ValueError('text length')
                         with LOCK:
                             if sequence<=VOICE_CANCELLED.get(device,{}).get(session,0):raise ValueError('cancelled turn')
-                            CONVERSATION.start(device,session,sequence,text)
+                            CONVERSATION.start(device,session,sequence,text,ui_protocol=self.headers.get('X-Voice-UI',''))
                     else:
                         if type(body['ok']) is not bool or not isinstance(body['output'],str) or len(body['output'].encode())>786432:raise ValueError('result shape')
                         CONVERSATION.mailbox.ack(device,session,sequence,body['id'],body['ok'],body['output'],body.get('error',''))
@@ -180,7 +192,36 @@ class Handler(BaseHTTPRequestHandler):
                 if self.path=='/voice/stream':
                     if self.headers.get('Transfer-Encoding','').lower()!='chunked':raise ValueError('chunked required')
                     if self.headers.get('Content-Length') is not None:raise ValueError('ambiguous length')
-                    raw=read_chunks(self.rfile,progress)
+                    tolerated=False
+                    try:
+                        raw=read_chunks_tolerant(self.rfile,progress)
+                    except EarlyDisconnect as disc:
+                        # Board aborts short/no-voice takes by dropping the upload.
+                        # Tolerate what arrived instead of erroring the screen.
+                        tolerated=True
+                        raw=disc.args[0] if disc.args else b''
+                        if len(raw)>=12800:print('VOICE early-disconnect-tolerated bytes=%d'%len(raw),flush=True)
+                    if len(raw)<12800:
+                        # Short take, clean terminator or hang-up alike: quiet
+                        # no-capture. Cancelled turns stay completely silent.
+                        print('VOICE no-capture bytes=%d'%len(raw),flush=True)
+                        with LOCK:
+                            if sequence<=VOICE_CANCELLED.get(device,{}).get(session,0):
+                                return self.reply(200,b'{"recognized":false,"nocapture":true}')
+                            if generation==VOICE_GENERATION.get(device,0):
+                                write_interaction(device,'idle','\u672a\u5f55\u5230\u8bf4\u8bdd\uff0c\u8bf7\u9760\u8fd1\u9ea6\u514b\u98ce\u518d\u8bf4')
+                        return self.reply(200,b'{"recognized":false,"nocapture":true}')
+                    if tolerated:
+                        # Aborted takes with enough bytes must still sound like
+                        # speech; VAD-timeout silence stays a quiet no-capture.
+                        try:
+                            raw=validate_pcm(raw)
+                        except ValueError:
+                            print('VOICE no-capture bytes=%d rejected'%len(raw),flush=True)
+                            with LOCK:
+                                if generation==VOICE_GENERATION.get(device,0):
+                                    write_interaction(device,'idle','\u672a\u5f55\u5230\u8bf4\u8bdd\uff0c\u8bf7\u9760\u8fd1\u9ea6\u514b\u98ce\u518d\u8bf4')
+                            return self.reply(200,b'{"recognized":false,"nocapture":true}')
                 else:
                     size=int(self.headers.get('Content-Length','0'))
                     if not 12800<=size<=320000:raise ValueError('invalid length')
@@ -198,10 +239,13 @@ class Handler(BaseHTTPRequestHandler):
                     if generation!=VOICE_GENERATION.get(device,0):return self.reply(409,b'{}')
                     if self.headers.get('X-Voice-Dialogue')=='1':
                         if sequence<=VOICE_CANCELLED.get(device,{}).get(session,0):raise ValueError('cancelled turn')
-                        CONVERSATION.start(device,session,sequence,text)
+                        CONVERSATION.start(device,session,sequence,text,ui_protocol=self.headers.get('X-Voice-UI',''))
                     else:write_interaction(device,'waiting',text+'（仅识别模式）')
                 return self.reply(200,b'{"recognized":true,"actuatorConnected":false}')
             except (ValueError,OSError,TimeoutError,KeyError,RuntimeError,subprocess.SubprocessError) as error:
+                if isinstance(error,(BrokenPipeError,ConnectionResetError)):
+                    # Board aborts by hanging up; outcome was already written (or is moot).
+                    print('VOICE client-gone',flush=True);return None
                 intake_errors={'chunked required','ambiguous length','recording timed out','invalid chunk header','invalid chunk size','audio too large','trailers unsupported','truncated audio','invalid length'}
                 reason=str(error) if isinstance(error,ValueError) and str(error) in intake_errors else type(error).__name__
                 print('VOICE failure='+reason,flush=True)

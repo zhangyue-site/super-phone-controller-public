@@ -71,6 +71,7 @@ class Job:
  sequence:int
  created:float
  touched:float
+ max_age:float=180
  cancelled:bool=False
  command:dict|None=None
  delivered:bool=False
@@ -89,6 +90,12 @@ class Job:
  video_received:float=0
  video_width:int=0
  video_height:int=0
+ ui_protocol:str=''
+ ui_revision:int=0
+ ui_seen_revision:int=0
+ ui_heard:str=''
+ ui_plan:list=field(default_factory=list)
+ ui_event:threading.Event=field(default_factory=threading.Event)
  speech_error:bool=False
  state:str='thinking'
  done:bool=False
@@ -97,7 +104,7 @@ class Job:
 class Mailbox:
  def __init__(self,clock=time.monotonic):self.clock=clock;self.lock=threading.RLock();self.jobs={};self.high={}
  def _live(self,j):
-  if j.cancelled or self.clock()-j.created>180 or self.clock()-j.touched>45:
+  if j.cancelled or self.clock()-j.created>j.max_age or self.clock()-j.touched>45:
    j.cancelled=True;j.video=b'';j.event.set();raise ValueError('turn cancelled or expired')
  def _job(self,device,session,seq):
   j=self.jobs.get(device)
@@ -123,22 +130,33 @@ class Mailbox:
   with self.lock:
    j=self._job(device,session,seq);j.touched=self.clock()
    if pointer_protocol=='absolute-v1':j.pointer_protocol=pointer_protocol
-   if j.command and not j.delivered:j.delivered=True;return dict(j.command)
-   return {'op':'done' if j.done else 'wait','state':j.state,'reply':j.reply,'audio':bool(j.audio),'speechError':j.speech_error}
+   ui={'uiRevision':j.ui_revision} if j.ui_protocol=='plan-v1' else {}
+   if j.command and not j.delivered:
+    # Pointer packets have a strict firmware key allowlist; UI metadata belongs to status packets.
+    j.delivered=True;return dict(j.command,**({} if j.command['op']=='hid_pointer' else ui))
+   return dict({'op':'done' if j.done else 'wait','state':j.state,'reply':j.reply,'audio':bool(j.audio),'speechError':j.speech_error},**ui)
+ def ui_seen(self,device,session,seq,revision):
+  with self.lock:
+   j=self._job(device,session,seq)
+   if j.ui_protocol!='plan-v1' or type(revision)!=int or revision<1 or revision!=j.ui_revision:raise ValueError('stale UI revision')
+   j.ui_seen_revision=revision;j.touched=self.clock();j.ui_event.set()
+   print('VOICE_UI_SEEN '+json.dumps({'turn':seq,'revision':revision}),flush=True)
+   return {'accepted':True}
+
  def ack(self,device,session,seq,ident,ok,output,error=''):
   if error and error not in COMMAND_ERRORS:raise ValueError('unknown phone command error')
   with self.lock:
    j=self._job(device,session,seq)
    if not j.command or not j.delivered or ident!=j.command['id']:raise ValueError('stale acknowledgement')
    if not isinstance(output,str) or len(output.encode())>(786432 if j.command['op']=='screenshot' else 48000):raise ValueError('command output size')
-   print('PHONE_RECEIPT device=%s turn=%d id=%s ok=%s'%(device,seq,ident[:8],ok),flush=True)
+   print('PHONE_RECEIPT device=%s turn=%d id=%s ok=%s err=%s'%(device,seq,ident[:8],ok,error or '-'),flush=True)
    j.last_receipt={'id':ident,'op':j.command['op'],'ok':ok,'barrier_before':j.video_barrier}
    j.result=(ok,output,error);j.command=None;j.touched=self.clock()
    if j.fenced:j.video_barrier=uuid.uuid4().hex;j.video=b''
    j.event.set()
  def execute(self,j,command):
   self.offer(j,command)
-  until=self.clock()+35
+  until=self.clock()+60
   while self.clock()<until:
    j.event.wait(.2)
    with self.lock:

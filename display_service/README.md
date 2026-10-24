@@ -42,3 +42,37 @@ ADB连接依赖手机5555已启用及RSA授权。当前板子是USB网络设备�
 [本次验证与实机缺口](../docs/handoff/2026-10-21-dialogue-adb-validation.md)
 
 后续开发与升级采用云端工作区、GitHub Actions构建和106私有OTA发布，详见 [云端开发与升级](../docs/cloud-development-and-ota.md)。手机可由机主手动恢复ADB5555；屏幕会明确提醒。本轮不要求改USB Host硬件。
+
+## AI 语音导航与模型路由（2026-10-24 同步）
+
+本轮新增模块：
+
+- `model_routing.py`：所有模型请求统一从 `EPAPER_MODEL_CONFIG` 环境变量指定的本机 JSON（默认 `/root/.openclaw/openclaw.json`，仅服务器本机路径）读取 provider 的 `baseUrl` / `apiKey`。**代码不内置任何密钥**，接入自己的 OpenAI 兼容渠道即可运行。配置示例：
+
+```json
+{
+  "models": { "providers": {
+    "my-provider": {
+      "baseUrl": "https://your-endpoint/v1",
+      "apiKey": "替换成你自己的key",
+      "models": [{ "id": "你的视觉模型名" }]
+    }
+  }}
+}
+```
+
+- 渠道/模型选择：`EPAPER_VISION_PROVIDER`（不设则按 xiaomi → opencode-go 顺序取配置中存在者）、`EPAPER_VISION_MODEL`（默认 `mimo-v2.6-flash`，请换成你自己渠道里的模型名）。
+- `voice_ui.py`：语音计划预告——板端小屏先显示本轮步骤，板端确认后服务器才开始操作手机。
+- `general_nav.py` / `general_vision.py`：通用"打开/进入/搜索"安全导航，含结果核验与第二视觉渠道兜底（`EPAPER_VISION_FALLBACK_PROVIDER`）。
+- `autoglm_adapter.py`：AutoGLM 兼容适配（可选，`EPAPER_AUTOGLM_PROVIDER` / `EPAPER_AUTOGLM_MODEL`）。
+- `dialogue.py`：执行回执日志现在带错误码（`PHONE_RECEIPT ... ok=False err=input_failed` 等）。板端显示"本轮未完成"时，直接看服务日志的 `err=` 字段即可定位原因（常见：`input_failed` 点击未生效、`screen_changed` 画面变动、超时未回执）。
+- 新增 Python 依赖：Pillow（`PIL`，截图区域裁剪与结构比对）。
+
+构建与回归均不调用付费服务：
+
+```sh
+python3 -m py_compile display_service/*.py
+python3 -m unittest discover -s tests
+```
+
+模型推理用的是你自己配置的渠道（免费或付费自选）；本仓库的 CI 只构建 App，不发起任何模型请求。

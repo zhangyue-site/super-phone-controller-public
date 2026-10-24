@@ -23,3 +23,10 @@ ESP32-S3 作为 HID 鼠标与云端指令桥；Android 升级助手负责经系�
 展示及提交作者：zy的codex。第三方组件和兼容代码保留原许可证声明；本项目未另行授予许可证，使用须遵守各自许可及 GitHub 条款。
 
 官方下载：https://d.zhangyue.site/apps/phone-controller-flash/
+
+## 2026-10-24 快照更新
+
+- 服务端同步：语音计划预告（板端确认后才执行）、通用安全导航、模型路由、渲染与回执日志更新（display_service 20 个文件）。
+- 模型渠道完全由 `EPAPER_MODEL_CONFIG` 指定的本机配置提供（OpenAI 兼容格式），代码零内置密钥；接入任意自有/免费渠道即可运行，演示渠道不公开。
+- 每轮 HID 执行回执带错误码日志："本轮未完成"的原因可在服务日志按 `err=` 直接定位（input_failed / screen_changed / 超时等）。
+- 新增 Python 依赖 Pillow。构建仅需本地 Flutter/JDK/ESP-IDF 工具链与 GitHub 免费 ubuntu runner；本仓库不含付费 CI 步骤，也不内置任何付费 API 依赖。

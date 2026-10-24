@@ -1,4 +1,5 @@
 """Bounded WeChat navigation and explicit per-device verified replay skills."""
+from .model_routing import task_model_session
 import base64,hashlib,io,json,math,os,re,threading,time,zlib
 from pathlib import Path
 from PIL import Image
@@ -11,6 +12,9 @@ def parse_task(text):
  match=re.fullmatch(r"(?:请|帮我)?(?:打开|进入)微信(?:然后|并|，|,)?(?:找到|搜索|查找)([\u4e00-\u9fffA-Za-z0-9·]{1,24})",text)
  if not match or re.search(r"发送|发消息|不要|停止|取消|然后|转账|删除|支付",match[1]):return None
  return match[1]
+
+class ActionFrameChanged(ValueError):
+ """Pre-dispatch frame fence rejection; no actuator command was sent."""
 
 class WechatNavigator:
  def __init__(self,mailbox,store,vision=observe,frame_timeout=15):
@@ -41,9 +45,11 @@ class WechatNavigator:
   if type(confidence) not in (int,float) or not math.isfinite(confidence) or confidence<(.95 if verify else .9):raise ValueError("画面识别置信度不足")
   self._log(j,"vision",verify=verify,ms=round((time.monotonic()-start)*1000))
   return result
+ def _matches_action_frame(self,expected,sig,current):
+  return matches(expected,sig) and ('target' not in expected or region_matches(expected['target'],current))
  def _action(self,j,command,expected):
   self.m._live(j);current,_,sig=self._frame(j)
-  if not matches(expected,sig) or ('target' in expected and not region_matches(expected['target'],current)):raise ValueError("手机页面已变化，本次停止以避免点错")
+  if not self._matches_action_frame(expected,sig,current):raise ActionFrameChanged("手机页面已变化，本次停止以避免点错")
   self._log(j,"dispatch",op=command["op"])
   output=self.m.execute(j,command)
   good=("HID_HOME_REPORT_SENT" if command["op"]=="hid_home" else "HID_POINTER_REPORT_SENT" if command["op"]=="hid_pointer" else "__PC_EXIT_0__")
@@ -64,6 +70,7 @@ class WechatNavigator:
   x1,y1,x2,y2=bounds
   if not 0<=x1<x2<=1000 or not 0<=y1<y2<=1000 or x2-x1>(950 if target=='search_input' else 400) or y2-y1>250:raise ValueError("导航坐标超出范围")
   return {"op":"hid_pointer","kind":"click","x":(x1+x2)*32767//2000,"y":(y1+y2)*32767//2000},screen
+ @task_model_session
  def run(self,j,query):
   self.store.invalidate(j.device);j.fenced=True
   deadline=time.monotonic()+self.timeout
