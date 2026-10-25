@@ -31,12 +31,18 @@ class GeneralNavigator(WechatNavigator):
   print("GENERAL_NAV "+json.dumps(dict(device=j.device,turn=j.sequence,stage=stage,**metadata),separators=(",",":")),flush=True)
  def _action(self,j,command,sig):
   try:return super()._action(j,command,sig)
-  except PhoneCommandError as e:
+  except PhoneCommandError as first:
    # input_failed means the HID report never reached the USB endpoint:
-   # resubmitting once is safe (firmware dedupes by command id).
-   if e.code!='input_failed' or command.get('op') not in ('hid_pointer','hid_home'):raise
-   self._log(j,'input_retry',op=command.get('op'))
-   return super()._action(j,command,sig)
+   # resubmitting is safe (nothing was delivered; frame fences re-verify
+   # before every dispatch). Up to 3 attempts total with short backoff.
+   if first.code!='input_failed' or command.get('op') not in ('hid_pointer','hid_home'):raise
+   for attempt in (2,3):
+    time.sleep(.8*(attempt-1))
+    self._log(j,'input_retry',op=command.get('op'),attempt=attempt)
+    try:return super()._action(j,command,sig)
+    except PhoneCommandError as e:
+     if e.code!='input_failed':raise
+   raise first
  def _command(self,o,task):
   action=o.get('action')
   label=o.get('target_label')
